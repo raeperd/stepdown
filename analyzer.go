@@ -4,6 +4,7 @@ package stepdown
 import (
 	"go/ast"
 	"go/token"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -42,20 +43,23 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 
 	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
 		funcDecl := n.(*ast.FuncDecl)
-		if funcDecl.Recv != nil {
-			return // skip methods for now
-		}
 		pos := pass.Fset.Position(funcDecl.Pos())
 		if funcs[pos.Filename] == nil {
 			funcs[pos.Filename] = map[string]funcInfo{}
 		}
-		funcs[pos.Filename][funcDecl.Name.Name] = funcInfo{pos: funcDecl.Pos(), line: pos.Line}
+		key := funcDecl.Name.Name
+		if funcDecl.Recv != nil {
+			if typeName := recvTypeName(funcDecl); typeName != "" {
+				key = typeName + "." + funcDecl.Name.Name
+			}
+		}
+		funcs[pos.Filename][key] = funcInfo{pos: funcDecl.Pos(), line: pos.Line}
 	})
 
 	// Check each function's calls
 	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
 		funcDecl := n.(*ast.FuncDecl)
-		if funcDecl.Recv != nil || funcDecl.Body == nil {
+		if funcDecl.Body == nil {
 			return
 		}
 		callerPos := pass.Fset.Position(funcDecl.Pos())
@@ -64,25 +68,50 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			return
 		}
 
+		// Determine receiver info for method declarations
+		var recvVar, recvType string
+		if funcDecl.Recv != nil {
+			recvType = recvTypeName(funcDecl)
+			if len(funcDecl.Recv.List) > 0 && len(funcDecl.Recv.List[0].Names) > 0 {
+				recvVar = funcDecl.Recv.List[0].Names[0].Name
+			}
+		}
+
 		seen := map[string]bool{}
 		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
 			callExpr, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
-			ident, ok := callExpr.Fun.(*ast.Ident)
-			if !ok {
+
+			var calleeKey string
+			switch fun := callExpr.Fun.(type) {
+			case *ast.Ident:
+				calleeKey = fun.Name
+			case *ast.SelectorExpr:
+				if ident, ok := fun.X.(*ast.Ident); ok && recvVar != "" && ident.Name == recvVar {
+					calleeKey = recvType + "." + fun.Sel.Name
+				}
+			}
+			if calleeKey == "" {
 				return true
 			}
-			callee, exists := fileFuncs[ident.Name]
-			if !exists || seen[ident.Name] {
+
+			callee, exists := fileFuncs[calleeKey]
+			if !exists || seen[calleeKey] {
 				return true
 			}
 			if callee.line < callerPos.Line {
-				seen[ident.Name] = true
+				seen[calleeKey] = true
+				// Use short name (without type prefix) for the diagnostic message
+				_, calleeName, _ := strings.Cut(calleeKey, ".")
+				if calleeName == "" {
+					calleeName = calleeKey
+				}
+				callerName := funcDecl.Name.Name
 				pass.Reportf(callee.pos,
 					"function %q is called by %q but declared before it (stepdown rule)",
-					ident.Name, funcDecl.Name.Name,
+					calleeName, callerName,
 				)
 			}
 			return true
@@ -90,4 +119,20 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 	})
 
 	return nil, nil
+}
+
+// recvTypeName extracts the receiver type name from a method declaration,
+// handling both value receivers (T) and pointer receivers (*T).
+func recvTypeName(funcDecl *ast.FuncDecl) string {
+	if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
+		return ""
+	}
+	t := funcDecl.Recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	if ident, ok := t.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
 }

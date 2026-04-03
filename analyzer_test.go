@@ -11,4 +11,5 @@ func TestAnalyzer(t *testing.T) {
 	a := stepdown.NewAnalyzer(stepdown.Settings{})
 	analysistest.Run(t, analysistest.TestData(), a, "basic")
 	analysistest.Run(t, analysistest.TestData(), a, "valid")
+	analysistest.Run(t, analysistest.TestData(), a, "methods")
 }
