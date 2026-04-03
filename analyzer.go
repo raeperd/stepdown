@@ -91,9 +91,28 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			if !ok {
 				return true
 			}
-			if ident, ok := callExpr.Fun.(*ast.Ident); ok {
-				if _, exists := fileFuncs[ident.Name]; exists {
-					callees[ident.Name] = struct{}{}
+			switch fun := callExpr.Fun.(type) {
+			case *ast.Ident:
+				if _, exists := fileFuncs[fun.Name]; exists {
+					callees[fun.Name] = struct{}{}
+				}
+			case *ast.SelectorExpr:
+				if sel, ok := pass.TypesInfo.Selections[fun]; ok {
+					if fn, ok := sel.Obj().(*types.Func); ok {
+						fnPos := pass.Fset.Position(fn.Pos())
+						if fnPos.Filename == pos.Filename {
+							recv := sel.Recv()
+							if ptr, ok := recv.(*types.Pointer); ok {
+								recv = ptr.Elem()
+							}
+							if named, ok := recv.(*types.Named); ok {
+								key := named.Obj().Name() + "." + fun.Sel.Name
+								if _, exists := fileFuncs[key]; exists {
+									callees[key] = struct{}{}
+								}
+							}
+						}
+					}
 				}
 			}
 			return true
@@ -116,6 +135,12 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 		fileFuncs := funcs[callerPos.Filename]
 		if fileFuncs == nil {
 			return
+		}
+		callerKey := funcDecl.Name.Name
+		if funcDecl.Recv != nil {
+			if typeName := recvTypeName(funcDecl); typeName != "" {
+				callerKey = typeName + "." + funcDecl.Name.Name
+			}
 		}
 
 		seen := map[string]bool{}
@@ -160,7 +185,7 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			if callee.line < callerPos.Line {
 				// Skip circular calls — if callee can reach back to caller, neither ordering works
 				if fileGraph := callGraph[callerPos.Filename]; fileGraph != nil {
-					if reachable(fileGraph, calleeKey, funcDecl.Name.Name) {
+					if reachable(fileGraph, calleeKey, callerKey) {
 						return true
 					}
 				}
