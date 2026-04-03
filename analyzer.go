@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
-	"golang.org/x/tools/go/analysis/passes/inspect"
-	"golang.org/x/tools/go/ast/inspector"
 )
 
 // NewAnalyzer returns a new analyzer to check for the stepdown rule.
@@ -21,10 +19,9 @@ func NewAnalyzer(s Settings) *analysis.Analyzer {
 	a := &analyzer{exclusions: exclusions}
 
 	return &analysis.Analyzer{
-		Name:     "stepdown",
-		Doc:      "checks that callers are declared before callees (the stepdown rule)",
-		Run:      a.run,
-		Requires: []*analysis.Analyzer{inspect.Analyzer},
+		Name: "stepdown",
+		Doc:  "checks that callers are declared before callees (the stepdown rule)",
+		Run:  a.run,
 	}
 }
 
@@ -39,217 +36,155 @@ type analyzer struct {
 }
 
 func (a *analyzer) run(pass *analysis.Pass) (any, error) {
-	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
-
-	// Collect all function declarations and build call graph in a single pass
-	type funcInfo struct {
-		pos  token.Pos
-		line int
+	for _, file := range pass.Files {
+		a.checkFile(pass, file)
 	}
-	funcs := map[string]map[string]funcInfo{}                // filename -> funcName -> info
-	callGraph := map[string]map[string]map[string]struct{}{} // filename -> caller -> callees
+	return nil, nil
+}
 
-	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
-		funcDecl := n.(*ast.FuncDecl)
-		pos := pass.Fset.Position(funcDecl.Pos())
-		if funcs[pos.Filename] == nil {
-			funcs[pos.Filename] = map[string]funcInfo{}
-		}
-		key := funcDecl.Name.Name
-		if funcDecl.Recv != nil {
-			if typeName := recvTypeName(funcDecl); typeName != "" {
-				key = typeName + "." + funcDecl.Name.Name
-			}
-		}
-		funcs[pos.Filename][key] = funcInfo{pos: funcDecl.Pos(), line: pos.Line}
+func (a *analyzer) checkFile(pass *analysis.Pass, file *ast.File) {
+	filename := pass.Fset.Position(file.Pos()).Filename
 
-		// Build call graph for cycle detection (skip closures to avoid false edges)
+	// Collect function declarations and build call graph (deduplicated, in invocation order)
+	funcs := map[string]token.Pos{} // funcKey -> declaration pos
+	calls := map[string][]string{}  // caller -> unique callees in invocation order
+	for _, decl := range file.Decls {
+		funcDecl, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		key := funcKey(funcDecl)
+		funcs[key] = funcDecl.Pos()
 		if funcDecl.Body == nil {
-			return
+			continue
 		}
-		callees := map[string]struct{}{}
+		seen := map[string]struct{}{}
+		var callees []string
 		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
-			if _, ok := n.(*ast.FuncLit); ok {
+			switch n := n.(type) {
+			case *ast.FuncLit:
 				return false
-			}
-			callExpr, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			switch fun := callExpr.Fun.(type) {
-			case *ast.Ident:
-				callees[fun.Name] = struct{}{}
-			case *ast.SelectorExpr:
-				if sel, ok := pass.TypesInfo.Selections[fun]; ok {
-					if fn, ok := sel.Obj().(*types.Func); ok {
-						fnPos := pass.Fset.Position(fn.Pos())
-						if fnPos.Filename == pos.Filename {
-							recv := sel.Recv()
-							if ptr, ok := recv.(*types.Pointer); ok {
-								recv = ptr.Elem()
-							}
-							if named, ok := recv.(*types.Named); ok {
-								callees[named.Obj().Name()+"."+fun.Sel.Name] = struct{}{}
-							}
+			case *ast.CallExpr:
+				// Find the called function or method if it's declared in this file.
+				var fn *types.Func
+				switch fun := n.Fun.(type) {
+				case *ast.Ident: // plain call: foo()
+					if f, ok := pass.TypesInfo.Uses[fun].(*types.Func); ok {
+						fn = f
+					}
+				case *ast.SelectorExpr: // method call: s.foo()
+					if sel, ok := pass.TypesInfo.Selections[fun]; ok {
+						if f, ok := sel.Obj().(*types.Func); ok {
+							fn = f
 						}
 					}
+				}
+				if fn == nil || pass.Fset.Position(fn.Pos()).Filename != filename {
+					return true
+				}
+				calleeKey := funcName(fn)
+				if _, ok := seen[calleeKey]; !ok {
+					seen[calleeKey] = struct{}{}
+					callees = append(callees, calleeKey)
 				}
 			}
 			return true
 		})
 		if len(callees) > 0 {
-			if callGraph[pos.Filename] == nil {
-				callGraph[pos.Filename] = map[string]map[string]struct{}{}
-			}
-			callGraph[pos.Filename][key] = callees
+			calls[key] = callees
 		}
-	})
+	}
 
-	// Check each function's calls
-	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
-		funcDecl := n.(*ast.FuncDecl)
-		if funcDecl.Body == nil {
-			return
+	// Report caller-before-callee violations and callee invocation order violations
+	for _, decl := range file.Decls {
+		funcDecl, ok := decl.(*ast.FuncDecl)
+		if !ok || funcDecl.Body == nil {
+			continue
 		}
-		callerPos := pass.Fset.Position(funcDecl.Pos())
-		fileFuncs := funcs[callerPos.Filename]
-		if fileFuncs == nil {
-			return
+		callerKey := funcKey(funcDecl)
+		callerName := shortName(callerKey)
+		if _, ok := a.exclusions[callerName]; ok {
+			continue
 		}
-		callerKey := funcDecl.Name.Name
-		if funcDecl.Recv != nil {
-			if typeName := recvTypeName(funcDecl); typeName != "" {
-				callerKey = typeName + "." + funcDecl.Name.Name
-			}
-		}
+		callerLine := pass.Fset.Position(funcDecl.Pos()).Line
 
-		seen := map[string]bool{}
-		var invocationOrder []string
-		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
-			// Don't descend into closures — their calls belong to the closure, not the enclosing func
-			if _, ok := n.(*ast.FuncLit); ok {
-				return false
+		maxLine := 0
+		var maxKey string
+		for _, calleeKey := range calls[callerKey] {
+			// Skip if caller and callee form a cycle (e.g. a→b→a).
+			// In a cycle, at least one edge must go backward — moving the callee
+			// after the caller would just create a new violation elsewhere in the cycle.
+			if inCycle(calls, calleeKey, callerKey) {
+				continue
 			}
-			callExpr, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+			calleeName := shortName(calleeKey)
+			if _, ok := a.exclusions[calleeName]; ok {
+				continue
 			}
 
-			var calleeKey string
-			switch fun := callExpr.Fun.(type) {
-			case *ast.Ident:
-				calleeKey = fun.Name
-			case *ast.SelectorExpr:
-				// Use type info to resolve method calls (handles cross-struct)
-				if sel, ok := pass.TypesInfo.Selections[fun]; ok {
-					if fn, ok := sel.Obj().(*types.Func); ok {
-						fnPos := pass.Fset.Position(fn.Pos())
-						if fnPos.Filename == callerPos.Filename {
-							recv := sel.Recv()
-							if ptr, ok := recv.(*types.Pointer); ok {
-								recv = ptr.Elem()
-							}
-							if named, ok := recv.(*types.Named); ok {
-								calleeKey = named.Obj().Name() + "." + fun.Sel.Name
-							}
-						}
-					}
-				}
-			}
-			if calleeKey == "" {
-				return true
-			}
+			calleePos := funcs[calleeKey]
+			calleeLine := pass.Fset.Position(calleePos).Line
 
-			callee, exists := fileFuncs[calleeKey]
-			if !exists || seen[calleeKey] {
-				return true
-			}
-			seen[calleeKey] = true
-			invocationOrder = append(invocationOrder, calleeKey)
-			if callee.line < callerPos.Line {
-				// Skip circular calls — if callee can reach back to caller, neither ordering works
-				if fileGraph := callGraph[callerPos.Filename]; fileGraph != nil {
-					if reachable(fileGraph, calleeKey, callerKey) {
-						return true
-					}
-				}
-				// Use short name (without type prefix) for the diagnostic message
-				_, calleeName, _ := strings.Cut(calleeKey, ".")
-				if calleeName == "" {
-					calleeName = calleeKey
-				}
-				callerName := funcDecl.Name.Name
-				// Skip excluded functions (as caller or callee)
-				if _, ok := a.exclusions[callerName]; ok {
-					return true
-				}
-				if _, ok := a.exclusions[calleeName]; ok {
-					return true
-				}
-				pass.Reportf(callee.pos,
+			// Violation: callee declared before caller
+			if calleeLine < callerLine {
+				pass.Reportf(calleePos,
 					"function %q is called by %q but declared before it (stepdown rule)",
 					calleeName, callerName,
 				)
 			}
-			return true
-		})
 
-		// Check callee invocation order: callees should be declared in the order they are invoked
-		fileGraph := callGraph[callerPos.Filename]
-		maxLine := 0
-		var maxKey string
-		for _, calleeKey := range invocationOrder {
-			// Skip circular callees — their position is unreliable
-			if fileGraph != nil && reachable(fileGraph, calleeKey, callerKey) {
-				continue
-			}
-			// Skip excluded callees
-			_, calleeName, _ := strings.Cut(calleeKey, ".")
-			if calleeName == "" {
-				calleeName = calleeKey
-			}
-			if _, ok := a.exclusions[calleeName]; ok {
-				continue
-			}
-			if _, ok := a.exclusions[funcDecl.Name.Name]; ok {
-				continue
-			}
-			callee := fileFuncs[calleeKey]
-			if callee.line < maxLine {
-				_, maxName, _ := strings.Cut(maxKey, ".")
-				if maxName == "" {
-					maxName = maxKey
-				}
-				pass.Reportf(callee.pos,
+			// Violation: callees declared in different order than invoked
+			if calleeLine < maxLine {
+				pass.Reportf(calleePos,
 					"function %q is called by %q before %q but declared after it (stepdown rule)",
-					calleeName, funcDecl.Name.Name, maxName,
+					calleeName, callerName, shortName(maxKey),
 				)
 			}
-			if callee.line > maxLine {
-				maxLine = callee.line
+			if calleeLine > maxLine {
+				maxLine = calleeLine
 				maxKey = calleeKey
 			}
 		}
-	})
-
-	return nil, nil
+	}
 }
 
-func recvTypeName(funcDecl *ast.FuncDecl) string {
-	if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
-		return ""
+func funcName(fn *types.Func) string {
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return fn.Name()
 	}
-	t := funcDecl.Recv.List[0].Type
-	if star, ok := t.(*ast.StarExpr); ok {
-		t = star.X
+	t := sig.Recv().Type()
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
 	}
-	if ident, ok := t.(*ast.Ident); ok {
-		return ident.Name
+	if named, ok := t.(*types.Named); ok {
+		return named.Obj().Name() + "." + fn.Name()
 	}
-	return ""
+	return fn.Name()
 }
 
-func reachable(graph map[string]map[string]struct{}, src, dst string) bool {
+func funcKey(funcDecl *ast.FuncDecl) string {
+	if funcDecl.Recv != nil && len(funcDecl.Recv.List) > 0 {
+		t := funcDecl.Recv.List[0].Type
+		if star, ok := t.(*ast.StarExpr); ok {
+			t = star.X
+		}
+		if ident, ok := t.(*ast.Ident); ok {
+			return ident.Name + "." + funcDecl.Name.Name
+		}
+	}
+	return funcDecl.Name.Name
+}
+
+func shortName(key string) string {
+	_, name, _ := strings.Cut(key, ".")
+	if name == "" {
+		return key
+	}
+	return name
+}
+
+func inCycle(graph map[string][]string, src, dst string) bool {
 	visited := map[string]bool{}
 	stack := []string{src}
 	for len(stack) > 0 {
@@ -262,9 +197,7 @@ func reachable(graph map[string]map[string]struct{}, src, dst string) bool {
 			continue
 		}
 		visited[node] = true
-		for next := range graph[node] {
-			stack = append(stack, next)
-		}
+		stack = append(stack, graph[node]...)
 	}
 	return false
 }
