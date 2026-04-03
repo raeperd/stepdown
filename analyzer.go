@@ -4,6 +4,7 @@ package stepdown
 import (
 	"go/ast"
 	"go/token"
+	"go/types"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -117,15 +118,6 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			return
 		}
 
-		// Determine receiver info for method declarations
-		var recvVar, recvType string
-		if funcDecl.Recv != nil {
-			recvType = recvTypeName(funcDecl)
-			if len(funcDecl.Recv.List) > 0 && len(funcDecl.Recv.List[0].Names) > 0 {
-				recvVar = funcDecl.Recv.List[0].Names[0].Name
-			}
-		}
-
 		seen := map[string]bool{}
 		var invocationOrder []string
 		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
@@ -139,8 +131,20 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			case *ast.Ident:
 				calleeKey = fun.Name
 			case *ast.SelectorExpr:
-				if ident, ok := fun.X.(*ast.Ident); ok && recvVar != "" && ident.Name == recvVar {
-					calleeKey = recvType + "." + fun.Sel.Name
+				// Use type info to resolve method calls (handles cross-struct)
+				if sel, ok := pass.TypesInfo.Selections[fun]; ok {
+					if fn, ok := sel.Obj().(*types.Func); ok {
+						fnPos := pass.Fset.Position(fn.Pos())
+						if fnPos.Filename == callerPos.Filename {
+							recv := sel.Recv()
+							if ptr, ok := recv.(*types.Pointer); ok {
+								recv = ptr.Elem()
+							}
+							if named, ok := recv.(*types.Named); ok {
+								calleeKey = named.Obj().Name() + "." + fun.Sel.Name
+							}
+						}
+					}
 				}
 			}
 			if calleeKey == "" {
