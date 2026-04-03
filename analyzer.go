@@ -31,43 +31,6 @@ type Settings struct {
 
 type analyzer struct{}
 
-// reachable checks if dst is reachable from src in the call graph via DFS.
-func reachable(graph map[string]map[string]struct{}, src, dst string) bool {
-	visited := map[string]bool{}
-	stack := []string{src}
-	for len(stack) > 0 {
-		node := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if node == dst {
-			return true
-		}
-		if visited[node] {
-			continue
-		}
-		visited[node] = true
-		for next := range graph[node] {
-			stack = append(stack, next)
-		}
-	}
-	return false
-}
-
-// recvTypeName extracts the receiver type name from a method declaration,
-// handling both value receivers (T) and pointer receivers (*T).
-func recvTypeName(funcDecl *ast.FuncDecl) string {
-	if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
-		return ""
-	}
-	t := funcDecl.Recv.List[0].Type
-	if star, ok := t.(*ast.StarExpr); ok {
-		t = star.X
-	}
-	if ident, ok := t.(*ast.Ident); ok {
-		return ident.Name
-	}
-	return ""
-}
-
 func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 
@@ -205,4 +168,38 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 	})
 
 	return nil, nil
+}
+
+func reachable(graph map[string]map[string]struct{}, src, dst string) bool {
+	visited := map[string]bool{}
+	stack := []string{src}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if node == dst {
+			return true
+		}
+		if visited[node] {
+			continue
+		}
+		visited[node] = true
+		for next := range graph[node] {
+			stack = append(stack, next)
+		}
+	}
+	return false
+}
+
+func recvTypeName(funcDecl *ast.FuncDecl) string {
+	if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
+		return ""
+	}
+	t := funcDecl.Recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	if ident, ok := t.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
 }
