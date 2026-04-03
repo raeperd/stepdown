@@ -195,15 +195,27 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 		})
 
 		// Check callee invocation order: callees should be declared in the order they are invoked
+		fileGraph := callGraph[callerPos.Filename]
 		maxLine := 0
 		var maxKey string
 		for _, calleeKey := range invocationOrder {
+			// Skip circular callees — their position is unreliable
+			if fileGraph != nil && reachable(fileGraph, calleeKey, callerKey) {
+				continue
+			}
+			// Skip excluded callees
+			_, calleeName, _ := strings.Cut(calleeKey, ".")
+			if calleeName == "" {
+				calleeName = calleeKey
+			}
+			if _, ok := a.exclusions[calleeName]; ok {
+				continue
+			}
+			if _, ok := a.exclusions[funcDecl.Name.Name]; ok {
+				continue
+			}
 			callee := fileFuncs[calleeKey]
 			if callee.line < maxLine {
-				_, calleeName, _ := strings.Cut(calleeKey, ".")
-				if calleeName == "" {
-					calleeName = calleeKey
-				}
 				_, maxName, _ := strings.Cut(maxKey, ".")
 				if maxName == "" {
 					maxName = maxKey
