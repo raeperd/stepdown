@@ -13,7 +13,11 @@ import (
 
 // NewAnalyzer returns a new analyzer to check for the stepdown rule.
 func NewAnalyzer(s Settings) *analysis.Analyzer {
-	a := &analyzer{}
+	exclusions := make(map[string]struct{}, len(s.Exclusions))
+	for _, name := range s.Exclusions {
+		exclusions[name] = struct{}{}
+	}
+	a := &analyzer{exclusions: exclusions}
 
 	return &analysis.Analyzer{
 		Name:     "stepdown",
@@ -29,7 +33,9 @@ type Settings struct {
 	Exclusions []string
 }
 
-type analyzer struct{}
+type analyzer struct {
+	exclusions map[string]struct{}
+}
 
 func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
@@ -109,6 +115,13 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 					calleeName = calleeKey
 				}
 				callerName := funcDecl.Name.Name
+				// Skip excluded functions (as caller or callee)
+				if _, ok := a.exclusions[callerName]; ok {
+					return true
+				}
+				if _, ok := a.exclusions[calleeName]; ok {
+					return true
+				}
 				pass.Reportf(callee.pos,
 					"function %q is called by %q but declared before it (stepdown rule)",
 					calleeName, callerName,
