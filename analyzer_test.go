@@ -21,3 +21,8 @@ func TestAnalyzerExclusions(t *testing.T) {
 	a := stepdown.NewAnalyzer(stepdown.Settings{Exclusions: []string{"init"}})
 	analysistest.Run(t, analysistest.TestData(), a, "exclusions")
 }
+
+func TestAnalyzerCalleeExclusion(t *testing.T) {
+	a := stepdown.NewAnalyzer(stepdown.Settings{Exclusions: []string{"excluded"}})
+	analysistest.Run(t, analysistest.TestData(), a, "callee_exclusion")
+}
