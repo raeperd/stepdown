@@ -64,7 +64,9 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			return
 		}
 
+		// Collect callees in invocation order (first occurrence only)
 		seen := map[string]bool{}
+		var invocationOrder []string
 		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
 			callExpr, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -74,19 +76,38 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			if !ok {
 				return true
 			}
-			callee, exists := fileFuncs[ident.Name]
-			if !exists || seen[ident.Name] {
+			if _, exists := fileFuncs[ident.Name]; !exists || seen[ident.Name] {
 				return true
 			}
-			if callee.line < callerPos.Line {
-				seen[ident.Name] = true
-				pass.Reportf(callee.pos,
-					"function %q is called by %q but declared before it (stepdown rule)",
-					ident.Name, funcDecl.Name.Name,
-				)
-			}
+			seen[ident.Name] = true
+			invocationOrder = append(invocationOrder, ident.Name)
 			return true
 		})
+
+		// Check caller-before-callee violations
+		for _, calleeName := range invocationOrder {
+			callee := fileFuncs[calleeName]
+			if callee.line < callerPos.Line {
+				pass.Reportf(callee.pos,
+					"function %q is called by %q but declared before it (stepdown rule)",
+					calleeName, funcDecl.Name.Name,
+				)
+			}
+		}
+
+		// Check callee invocation order vs declaration order
+		for i := 0; i < len(invocationOrder); i++ {
+			for j := i + 1; j < len(invocationOrder); j++ {
+				earlier := invocationOrder[i]
+				later := invocationOrder[j]
+				if funcs[callerPos.Filename][later].line < funcs[callerPos.Filename][earlier].line {
+					pass.Reportf(funcs[callerPos.Filename][later].pos,
+						"function %q is called by %q before %q but declared after it (stepdown rule)",
+						later, funcDecl.Name.Name, earlier,
+					)
+				}
+			}
+		}
 	})
 
 	return nil, nil
