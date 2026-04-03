@@ -52,7 +52,45 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 		funcs[pos.Filename][funcDecl.Name.Name] = funcInfo{pos: funcDecl.Pos(), line: pos.Line}
 	})
 
-	// Check each function's calls
+	// Build call graph per file: caller -> set of callees
+	callGraph := map[string]map[string]map[string]bool{} // filename -> caller -> callees
+
+	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
+		funcDecl := n.(*ast.FuncDecl)
+		if funcDecl.Recv != nil || funcDecl.Body == nil {
+			return
+		}
+		callerName := funcDecl.Name.Name
+		callerPos := pass.Fset.Position(funcDecl.Pos())
+		fileFuncs := funcs[callerPos.Filename]
+		if fileFuncs == nil {
+			return
+		}
+
+		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
+			callExpr, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := callExpr.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if _, exists := fileFuncs[ident.Name]; !exists {
+				return true
+			}
+			if callGraph[callerPos.Filename] == nil {
+				callGraph[callerPos.Filename] = map[string]map[string]bool{}
+			}
+			if callGraph[callerPos.Filename][callerName] == nil {
+				callGraph[callerPos.Filename][callerName] = map[string]bool{}
+			}
+			callGraph[callerPos.Filename][callerName][ident.Name] = true
+			return true
+		})
+	})
+
+	// Check each function's calls, skipping circular pairs
 	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
 		funcDecl := n.(*ast.FuncDecl)
 		if funcDecl.Recv != nil || funcDecl.Body == nil {
@@ -63,6 +101,7 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 		if fileFuncs == nil {
 			return
 		}
+		fileGraph := callGraph[callerPos.Filename]
 
 		seen := map[string]bool{}
 		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
@@ -79,6 +118,9 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 				return true
 			}
 			if callee.line < callerPos.Line {
+				if reachable(fileGraph, ident.Name, funcDecl.Name.Name) {
+					return true
+				}
 				seen[ident.Name] = true
 				pass.Reportf(callee.pos,
 					"function %q is called by %q but declared before it (stepdown rule)",
@@ -90,4 +132,25 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 	})
 
 	return nil, nil
+}
+
+// reachable returns true if there is a path from src to dst in the call graph using DFS.
+func reachable(graph map[string]map[string]bool, src, dst string) bool {
+	visited := map[string]bool{}
+	stack := []string{src}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if node == dst {
+			return true
+		}
+		if visited[node] {
+			continue
+		}
+		visited[node] = true
+		for next := range graph[node] {
+			stack = append(stack, next)
+		}
+	}
+	return false
 }
