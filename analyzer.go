@@ -2,8 +2,12 @@
 package stepdown
 
 import (
+	"go/ast"
+	"go/token"
+
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
+	"golang.org/x/tools/go/ast/inspector"
 )
 
 // NewAnalyzer returns a new analyzer to check for the stepdown rule.
@@ -27,6 +31,63 @@ type Settings struct {
 type analyzer struct{}
 
 func (a *analyzer) run(pass *analysis.Pass) (any, error) {
-	// TODO: implement stepdown rule analysis
+	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+
+	// Collect all function declarations grouped by file
+	type funcInfo struct {
+		pos  token.Pos
+		line int
+	}
+	funcs := map[string]map[string]funcInfo{} // filename -> funcName -> info
+
+	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
+		funcDecl := n.(*ast.FuncDecl)
+		if funcDecl.Recv != nil {
+			return // skip methods for now
+		}
+		pos := pass.Fset.Position(funcDecl.Pos())
+		if funcs[pos.Filename] == nil {
+			funcs[pos.Filename] = map[string]funcInfo{}
+		}
+		funcs[pos.Filename][funcDecl.Name.Name] = funcInfo{pos: funcDecl.Pos(), line: pos.Line}
+	})
+
+	// Check each function's calls
+	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
+		funcDecl := n.(*ast.FuncDecl)
+		if funcDecl.Recv != nil || funcDecl.Body == nil {
+			return
+		}
+		callerPos := pass.Fset.Position(funcDecl.Pos())
+		fileFuncs := funcs[callerPos.Filename]
+		if fileFuncs == nil {
+			return
+		}
+
+		seen := map[string]bool{}
+		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
+			callExpr, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := callExpr.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			callee, exists := fileFuncs[ident.Name]
+			if !exists || seen[ident.Name] {
+				return true
+			}
+			if callee.line < callerPos.Line {
+				seen[ident.Name] = true
+				pass.Reportf(callee.pos,
+					"function %q is called by %q but declared before it (stepdown rule)",
+					ident.Name, funcDecl.Name.Name,
+				)
+			}
+			return true
+		})
+	})
+
 	return nil, nil
 }
