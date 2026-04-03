@@ -41,12 +41,13 @@ type analyzer struct {
 func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 
-	// Collect all function declarations grouped by file
+	// Collect all function declarations and build call graph in a single pass
 	type funcInfo struct {
 		pos  token.Pos
 		line int
 	}
-	funcs := map[string]map[string]funcInfo{} // filename -> funcName -> info
+	funcs := map[string]map[string]funcInfo{}                // filename -> funcName -> info
+	callGraph := map[string]map[string]map[string]struct{}{} // filename -> caller -> callees
 
 	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
 		funcDecl := n.(*ast.FuncDecl)
@@ -61,29 +62,13 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			}
 		}
 		funcs[pos.Filename][key] = funcInfo{pos: funcDecl.Pos(), line: pos.Line}
-	})
 
-	// Build call graph per file for cycle detection (skip closures to avoid false edges)
-	callGraph := map[string]map[string]map[string]struct{}{} // filename -> caller -> callees
-	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
-		funcDecl := n.(*ast.FuncDecl)
+		// Build call graph for cycle detection (skip closures to avoid false edges)
 		if funcDecl.Body == nil {
-			return
-		}
-		pos := pass.Fset.Position(funcDecl.Pos())
-		callerKey := funcDecl.Name.Name
-		if funcDecl.Recv != nil {
-			if typeName := recvTypeName(funcDecl); typeName != "" {
-				callerKey = typeName + "." + funcDecl.Name.Name
-			}
-		}
-		fileFuncs := funcs[pos.Filename]
-		if fileFuncs == nil {
 			return
 		}
 		callees := map[string]struct{}{}
 		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
-			// Don't descend into closures — their calls belong to the closure, not the enclosing func
 			if _, ok := n.(*ast.FuncLit); ok {
 				return false
 			}
@@ -93,9 +78,7 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			}
 			switch fun := callExpr.Fun.(type) {
 			case *ast.Ident:
-				if _, exists := fileFuncs[fun.Name]; exists {
-					callees[fun.Name] = struct{}{}
-				}
+				callees[fun.Name] = struct{}{}
 			case *ast.SelectorExpr:
 				if sel, ok := pass.TypesInfo.Selections[fun]; ok {
 					if fn, ok := sel.Obj().(*types.Func); ok {
@@ -106,10 +89,7 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 								recv = ptr.Elem()
 							}
 							if named, ok := recv.(*types.Named); ok {
-								key := named.Obj().Name() + "." + fun.Sel.Name
-								if _, exists := fileFuncs[key]; exists {
-									callees[key] = struct{}{}
-								}
+								callees[named.Obj().Name()+"."+fun.Sel.Name] = struct{}{}
 							}
 						}
 					}
@@ -121,7 +101,7 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			if callGraph[pos.Filename] == nil {
 				callGraph[pos.Filename] = map[string]map[string]struct{}{}
 			}
-			callGraph[pos.Filename][callerKey] = callees
+			callGraph[pos.Filename][key] = callees
 		}
 	})
 
