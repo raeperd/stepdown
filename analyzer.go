@@ -31,6 +31,43 @@ type Settings struct {
 
 type analyzer struct{}
 
+// reachable checks if dst is reachable from src in the call graph via DFS.
+func reachable(graph map[string]map[string]struct{}, src, dst string) bool {
+	visited := map[string]bool{}
+	stack := []string{src}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if node == dst {
+			return true
+		}
+		if visited[node] {
+			continue
+		}
+		visited[node] = true
+		for next := range graph[node] {
+			stack = append(stack, next)
+		}
+	}
+	return false
+}
+
+// recvTypeName extracts the receiver type name from a method declaration,
+// handling both value receivers (T) and pointer receivers (*T).
+func recvTypeName(funcDecl *ast.FuncDecl) string {
+	if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
+		return ""
+	}
+	t := funcDecl.Recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	if ident, ok := t.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
+}
+
 func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 
@@ -54,6 +91,49 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			}
 		}
 		funcs[pos.Filename][key] = funcInfo{pos: funcDecl.Pos(), line: pos.Line}
+	})
+
+	// Build call graph per file for cycle detection (skip closures to avoid false edges)
+	callGraph := map[string]map[string]map[string]struct{}{} // filename -> caller -> callees
+	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
+		funcDecl := n.(*ast.FuncDecl)
+		if funcDecl.Body == nil {
+			return
+		}
+		pos := pass.Fset.Position(funcDecl.Pos())
+		callerKey := funcDecl.Name.Name
+		if funcDecl.Recv != nil {
+			if typeName := recvTypeName(funcDecl); typeName != "" {
+				callerKey = typeName + "." + funcDecl.Name.Name
+			}
+		}
+		fileFuncs := funcs[pos.Filename]
+		if fileFuncs == nil {
+			return
+		}
+		callees := map[string]struct{}{}
+		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
+			// Don't descend into closures — their calls belong to the closure, not the enclosing func
+			if _, ok := n.(*ast.FuncLit); ok {
+				return false
+			}
+			callExpr, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if ident, ok := callExpr.Fun.(*ast.Ident); ok {
+				if _, exists := fileFuncs[ident.Name]; exists {
+					callees[ident.Name] = struct{}{}
+				}
+			}
+			return true
+		})
+		if len(callees) > 0 {
+			if callGraph[pos.Filename] == nil {
+				callGraph[pos.Filename] = map[string]map[string]struct{}{}
+			}
+			callGraph[pos.Filename][callerKey] = callees
+		}
 	})
 
 	// Check each function's calls
@@ -102,6 +182,12 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 				return true
 			}
 			if callee.line < callerPos.Line {
+				// Skip circular calls — if callee can reach back to caller, neither ordering works
+				if fileGraph := callGraph[callerPos.Filename]; fileGraph != nil {
+					if reachable(fileGraph, calleeKey, funcDecl.Name.Name) {
+						return true
+					}
+				}
 				seen[calleeKey] = true
 				// Use short name (without type prefix) for the diagnostic message
 				_, calleeName, _ := strings.Cut(calleeKey, ".")
@@ -119,20 +205,4 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 	})
 
 	return nil, nil
-}
-
-// recvTypeName extracts the receiver type name from a method declaration,
-// handling both value receivers (T) and pointer receivers (*T).
-func recvTypeName(funcDecl *ast.FuncDecl) string {
-	if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
-		return ""
-	}
-	t := funcDecl.Recv.List[0].Type
-	if star, ok := t.(*ast.StarExpr); ok {
-		t = star.X
-	}
-	if ident, ok := t.(*ast.Ident); ok {
-		return ident.Name
-	}
-	return ""
 }
