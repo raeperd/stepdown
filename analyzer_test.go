@@ -13,6 +13,7 @@ func TestAnalyzer(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), a, "valid")
 	analysistest.Run(t, analysistest.TestData(), a, "methods")
 	analysistest.Run(t, analysistest.TestData(), a, "circular")
+	analysistest.Run(t, analysistest.TestData(), a, "calleeorder")
 }
 
 func TestAnalyzerExclusions(t *testing.T) {

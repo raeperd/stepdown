@@ -127,6 +127,7 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 		}
 
 		seen := map[string]bool{}
+		var invocationOrder []string
 		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
 			callExpr, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -150,6 +151,8 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			if !exists || seen[calleeKey] {
 				return true
 			}
+			seen[calleeKey] = true
+			invocationOrder = append(invocationOrder, calleeKey)
 			if callee.line < callerPos.Line {
 				// Skip circular calls — if callee can reach back to caller, neither ordering works
 				if fileGraph := callGraph[callerPos.Filename]; fileGraph != nil {
@@ -157,7 +160,6 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 						return true
 					}
 				}
-				seen[calleeKey] = true
 				// Use short name (without type prefix) for the diagnostic message
 				_, calleeName, _ := strings.Cut(calleeKey, ".")
 				if calleeName == "" {
@@ -178,9 +180,48 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			}
 			return true
 		})
+
+		// Check callee invocation order: callees should be declared in the order they are invoked
+		maxLine := 0
+		var maxKey string
+		for _, calleeKey := range invocationOrder {
+			callee := fileFuncs[calleeKey]
+			if callee.line < maxLine {
+				_, calleeName, _ := strings.Cut(calleeKey, ".")
+				if calleeName == "" {
+					calleeName = calleeKey
+				}
+				_, maxName, _ := strings.Cut(maxKey, ".")
+				if maxName == "" {
+					maxName = maxKey
+				}
+				pass.Reportf(callee.pos,
+					"function %q is called by %q before %q but declared after it (stepdown rule)",
+					calleeName, funcDecl.Name.Name, maxName,
+				)
+			}
+			if callee.line > maxLine {
+				maxLine = callee.line
+				maxKey = calleeKey
+			}
+		}
 	})
 
 	return nil, nil
+}
+
+func recvTypeName(funcDecl *ast.FuncDecl) string {
+	if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
+		return ""
+	}
+	t := funcDecl.Recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	if ident, ok := t.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
 }
 
 func reachable(graph map[string]map[string]struct{}, src, dst string) bool {
@@ -201,18 +242,4 @@ func reachable(graph map[string]map[string]struct{}, src, dst string) bool {
 		}
 	}
 	return false
-}
-
-func recvTypeName(funcDecl *ast.FuncDecl) string {
-	if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
-		return ""
-	}
-	t := funcDecl.Recv.List[0].Type
-	if star, ok := t.(*ast.StarExpr); ok {
-		t = star.X
-	}
-	if ident, ok := t.(*ast.Ident); ok {
-		return ident.Name
-	}
-	return ""
 }
