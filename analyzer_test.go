@@ -17,3 +17,8 @@ func TestAnalyzerExclusions(t *testing.T) {
 	a := stepdown.NewAnalyzer(stepdown.Settings{Exclusions: []string{"init"}})
 	analysistest.Run(t, analysistest.TestData(), a, "exclusions")
 }
+
+func TestAnalyzerExclusionsMultiple(t *testing.T) {
+	a := stepdown.NewAnalyzer(stepdown.Settings{Exclusions: []string{"init", "main"}})
+	analysistest.Run(t, analysistest.TestData(), a, "exclusions_multi")
+}
