@@ -121,6 +121,10 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 		seen := map[string]bool{}
 		var invocationOrder []string
 		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
+			// Don't descend into closures — their calls belong to the closure, not the enclosing func
+			if _, ok := n.(*ast.FuncLit); ok {
+				return false
+			}
 			callExpr, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
