@@ -1,0 +1,12 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofumpt
+    - gci
+
+linters:
+  exclusions:
+    presets:
+      - common-false-positives
+      - std-error-handling
