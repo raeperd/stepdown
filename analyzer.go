@@ -2,7 +2,6 @@
 package stepdown
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 
@@ -65,6 +64,7 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 			return
 		}
 
+		seen := map[string]bool{}
 		ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
 			callExpr, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -75,14 +75,15 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 				return true
 			}
 			callee, exists := fileFuncs[ident.Name]
-			if !exists {
+			if !exists || seen[ident.Name] {
 				return true
 			}
 			if callee.line < callerPos.Line {
-				pass.Reportf(callee.pos, fmt.Sprintf(
+				seen[ident.Name] = true
+				pass.Reportf(callee.pos,
 					"function %q is called by %q but declared before it (stepdown rule)",
 					ident.Name, funcDecl.Name.Name,
-				))
+				)
 			}
 			return true
 		})
