@@ -12,3 +12,8 @@ func TestAnalyzer(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), a, "basic")
 	analysistest.Run(t, analysistest.TestData(), a, "valid")
 }
+
+func TestAnalyzerExclusions(t *testing.T) {
+	a := stepdown.NewAnalyzer(stepdown.Settings{Exclusions: []string{"init"}})
+	analysistest.Run(t, analysistest.TestData(), a, "exclusions")
+}
