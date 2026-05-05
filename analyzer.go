@@ -102,8 +102,7 @@ func (a *analyzer) checkFile(pass *analysis.Pass, file *ast.File) {
 			continue
 		}
 		callerKey := funcKey(funcDecl)
-		callerName := shortName(callerKey)
-		if _, ok := a.exclusions[callerName]; ok {
+		if a.isExcluded(callerKey) {
 			continue
 		}
 		callerLine := pass.Fset.Position(funcDecl.Pos()).Line
@@ -117,8 +116,7 @@ func (a *analyzer) checkFile(pass *analysis.Pass, file *ast.File) {
 			if inCycle(calls, calleeKey, callerKey) {
 				continue
 			}
-			calleeName := shortName(calleeKey)
-			if _, ok := a.exclusions[calleeName]; ok {
+			if a.isExcluded(calleeKey) {
 				continue
 			}
 
@@ -129,7 +127,7 @@ func (a *analyzer) checkFile(pass *analysis.Pass, file *ast.File) {
 			if calleeLine < callerLine {
 				pass.Reportf(calleePos,
 					"function %q is called by %q but declared before it (stepdown rule)",
-					calleeName, callerName,
+					calleeKey, callerKey,
 				)
 			}
 
@@ -137,7 +135,7 @@ func (a *analyzer) checkFile(pass *analysis.Pass, file *ast.File) {
 			if calleeLine < maxLine {
 				pass.Reportf(calleePos,
 					"function %q is called by %q before %q but declared after it (stepdown rule)",
-					calleeName, callerName, shortName(maxKey),
+					calleeKey, callerKey, maxKey,
 				)
 			}
 			if calleeLine > maxLine {
@@ -174,6 +172,14 @@ func funcKey(funcDecl *ast.FuncDecl) string {
 		}
 	}
 	return funcDecl.Name.Name
+}
+
+func (a *analyzer) isExcluded(key string) bool {
+	if _, ok := a.exclusions[key]; ok {
+		return true
+	}
+	_, ok := a.exclusions[shortName(key)]
+	return ok
 }
 
 func shortName(key string) string {
