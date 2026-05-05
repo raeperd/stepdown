@@ -27,7 +27,11 @@ func NewAnalyzer(s Settings) *analysis.Analyzer {
 
 // Settings is the configuration for the analyzer.
 type Settings struct {
-	// Exclusions is a list of function names to exclude from checks (e.g. "init", "main").
+	// Exclusions is a list of names to exclude from checks.
+	// Supported forms:
+	//   - plain function names (e.g. "init", "main")
+	//   - exact qualified method names (e.g. "Server.handle")
+	//   - short method names that match across receiver types (e.g. "handle")
 	Exclusions []string
 }
 
