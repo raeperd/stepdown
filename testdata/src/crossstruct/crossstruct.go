@@ -2,7 +2,7 @@ package crossstruct
 
 type DB struct{}
 
-func (d *DB) query() {} // want `function "query" is called by "handle" but declared before it \(stepdown rule\)`
+func (d *DB) query() {} // want `function "DB.query" is called by "Handler.handle" but declared before it \(stepdown rule\)`
 
 type Handler struct {
 	db *DB
