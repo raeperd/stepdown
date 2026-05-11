@@ -176,15 +176,27 @@ func funcName(fn *types.Func) string {
 
 func funcKey(funcDecl *ast.FuncDecl) string {
 	if funcDecl.Recv != nil && len(funcDecl.Recv.List) > 0 {
-		t := funcDecl.Recv.List[0].Type
-		if star, ok := t.(*ast.StarExpr); ok {
-			t = star.X
-		}
-		if ident, ok := t.(*ast.Ident); ok {
-			return ident.Name + "." + funcDecl.Name.Name
+		if name := receiverName(funcDecl.Recv.List[0].Type); name != "" {
+			return name + "." + funcDecl.Name.Name
 		}
 	}
 	return funcDecl.Name.Name
+}
+
+func receiverName(expr ast.Expr) string {
+	switch expr := expr.(type) {
+	case *ast.Ident:
+		return expr.Name
+	case *ast.StarExpr:
+		return receiverName(expr.X)
+	case *ast.IndexExpr:
+		return receiverName(expr.X)
+	case *ast.IndexListExpr:
+		return receiverName(expr.X)
+	case *ast.ParenExpr:
+		return receiverName(expr.X)
+	}
+	return ""
 }
 
 func (a *analyzer) isExcluded(key string) bool {
