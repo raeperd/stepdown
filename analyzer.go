@@ -147,7 +147,7 @@ func (a *analyzer) checkFile(pass *analysis.Pass, file *ast.File) {
 			// Violation: callees declared in different order than invoked
 			if calleeLine < maxLine {
 				pass.Reportf(calleePos,
-					"function %q is called by %q before %q but declared after it (stepdown rule)",
+					"function %q is called by %q after %q but declared before it (stepdown rule)",
 					calleeKey, callerKey, maxKey,
 				)
 			}
