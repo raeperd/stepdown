@@ -98,6 +98,16 @@ func (a *analyzer) checkFile(pass *analysis.Pass, file *ast.File) {
 		}
 	}
 
+	for caller, callees := range calls {
+		declaredCallees := callees[:0]
+		for _, calleeKey := range callees {
+			if _, ok := funcs[calleeKey]; ok {
+				declaredCallees = append(declaredCallees, calleeKey)
+			}
+		}
+		calls[caller] = declaredCallees
+	}
+
 	// Report caller-before-callee violations and callee invocation order violations
 	for _, decl := range file.Decls {
 		funcDecl, ok := decl.(*ast.FuncDecl)
