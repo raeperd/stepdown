@@ -142,6 +142,7 @@ func (a *analyzer) checkFile(pass *analysis.Pass, file *ast.File) {
 					"function %q is called by %q but declared before it (stepdown rule)",
 					calleeKey, callerKey,
 				)
+				continue
 			}
 
 			// Violation: callees declared in different order than invoked
