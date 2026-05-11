@@ -21,35 +21,27 @@ Robert C. Martin's *Clean Code* calls it the **Stepdown Rule**. Kent Beck calls 
 go install github.com/raeperd/stepdown/cmd/stepdown@latest
 ```
 
-Or with golangci-lint:
-
-```yaml
-# .golangci.yml
-linters:
-  enable:
-    - stepdown
-```
-
 ## Run
 
 ```bash
 stepdown ./...
 # or
 go vet -vettool=$(which stepdown) ./...
-# or
-golangci-lint run
 ```
 
 ## Configure
 
-```yaml
-# .golangci.yml
-linters-settings:
-  stepdown:
-    exclusions:
-      - "init"
-      - "main"
+Programmatic integrations can pass exclusions through `Settings`:
+
+```go
+stepdown.NewAnalyzer(stepdown.Settings{
+	Exclusions: []string{"init", "main", "Server.handle", "handle"},
+})
 ```
+
+Exclusions support plain function names, receiver-qualified method names, and short method names that match across receiver types.
+
+Native golangci-lint support is planned in [#8](https://github.com/raeperd/stepdown/issues/8).
 
 ## Contributing
 
