@@ -17,6 +17,7 @@ func TestAnalyzer(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), a, "crossstruct")
 	analysistest.Run(t, analysistest.TestData(), a, "interfacecall")
 	analysistest.Run(t, analysistest.TestData(), a, "genericmethods")
+	analysistest.Run(t, analysistest.TestData(), a, "duplicatereports")
 }
 
 func TestAnalyzerExclusions(t *testing.T) {
