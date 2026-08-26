@@ -11,23 +11,14 @@ Go linter that keeps your code reading top-to-bottom like a newsletter.
 main.go:20:1: function "bar" is called by "foo" but declared before it (stepdown rule)
 ```
 
-## What is the Stepdown Rule?
+## What is the stepdown rule?
 
-Robert C. Martin's *Clean Code* calls it the **Stepdown Rule**. Kent Beck calls it **Reading Order** in *Tidy First?*. Same idea — functions should be ordered so that each function appears above the functions it calls.
+Robert C. Martin's *Clean Code* calls it the **Stepdown Rule**. Kent Beck calls it **Reading Order** in *Tidy First?*. Both describe the same idea: functions should be ordered so that each function appears above the functions it calls.
 
 ## Install
 
 ```bash
 go install github.com/raeperd/stepdown/cmd/stepdown@latest
-```
-
-Or with golangci-lint:
-
-```yaml
-# .golangci.yml
-linters:
-  enable:
-    - stepdown
 ```
 
 ## Run
@@ -36,20 +27,53 @@ linters:
 stepdown ./...
 # or
 go vet -vettool=$(which stepdown) ./...
-# or
-golangci-lint run
 ```
 
-## Configure
+## Use with golangci-lint
+
+stepdown is available as a module plugin. Add it to `.custom-gcl.yml`:
 
 ```yaml
-# .golangci.yml
-linters-settings:
-  stepdown:
-    exclusions:
-      - "init"
-      - "main"
+version: v2.13.1
+plugins:
+  - module: github.com/raeperd/stepdown
+    import: github.com/raeperd/stepdown/plugin
+    version: v0.1.0
 ```
+
+Build a custom golangci-lint binary:
+
+```bash
+golangci-lint custom
+```
+
+Register and configure stepdown in `.golangci.yml`:
+
+```yaml
+version: "2"
+linters:
+  enable:
+    - stepdown
+  settings:
+    custom:
+      stepdown:
+        type: module
+        description: Checks that callers are declared before callees.
+        settings:
+          exclusions:
+            - init
+            - main
+```
+
+Run the custom binary:
+
+```bash
+./custom-gcl run
+```
+
+## Development
+
+AI tools were used during development. I personally reviewed every line of code in this repository, understand how it works, and take responsibility for its design, implementation, and maintenance.
 
 ## Contributing
 
