@@ -123,7 +123,13 @@ func (a *analyzer) checkFile(pass *analysis.Pass, file *ast.File) {
 				continue
 			}
 
-			calleePos := funcs[calleeKey]
+			// Skip callees with no declaration in this file, such as interface
+			// methods: the interface type is declared here, but the method has
+			// no body to move.
+			calleePos, ok := funcs[calleeKey]
+			if !ok {
+				continue
+			}
 			calleeLine := pass.Fset.Position(calleePos).Line
 
 			// Violation: callee declared before caller
