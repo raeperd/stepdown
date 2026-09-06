@@ -5,6 +5,6 @@ func run() {
 	second()
 }
 
-func second() {} // want `function "second" is called by "run" before "first" but declared after it \(stepdown rule\)`
+func second() {} // want `function "second" is called by "run" after "first" but declared before it \(stepdown rule\)`
 
 func first() {}

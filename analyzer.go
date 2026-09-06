@@ -138,12 +138,13 @@ func (a *analyzer) checkFile(pass *analysis.Pass, file *ast.File) {
 					"function %q is called by %q but declared before it (stepdown rule)",
 					calleeKey, callerKey,
 				)
+				continue
 			}
 
 			// Violation: callees declared in different order than invoked
 			if calleeLine < maxLine {
 				pass.Reportf(calleePos,
-					"function %q is called by %q before %q but declared after it (stepdown rule)",
+					"function %q is called by %q after %q but declared before it (stepdown rule)",
 					calleeKey, callerKey, maxKey,
 				)
 			}
@@ -172,15 +173,27 @@ func funcName(fn *types.Func) string {
 
 func funcKey(funcDecl *ast.FuncDecl) string {
 	if funcDecl.Recv != nil && len(funcDecl.Recv.List) > 0 {
-		t := funcDecl.Recv.List[0].Type
-		if star, ok := t.(*ast.StarExpr); ok {
-			t = star.X
-		}
-		if ident, ok := t.(*ast.Ident); ok {
-			return ident.Name + "." + funcDecl.Name.Name
+		if name := receiverName(funcDecl.Recv.List[0].Type); name != "" {
+			return name + "." + funcDecl.Name.Name
 		}
 	}
 	return funcDecl.Name.Name
+}
+
+func receiverName(expr ast.Expr) string {
+	switch expr := expr.(type) {
+	case *ast.Ident:
+		return expr.Name
+	case *ast.StarExpr:
+		return receiverName(expr.X)
+	case *ast.IndexExpr:
+		return receiverName(expr.X)
+	case *ast.IndexListExpr:
+		return receiverName(expr.X)
+	case *ast.ParenExpr:
+		return receiverName(expr.X)
+	}
+	return ""
 }
 
 func (a *analyzer) isExcluded(key string) bool {
