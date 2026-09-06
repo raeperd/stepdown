@@ -11,9 +11,9 @@ Go linter that keeps your code reading top-to-bottom like a newsletter.
 main.go:20:1: function "bar" is called by "foo" but declared before it (stepdown rule)
 ```
 
-## What is the Stepdown Rule?
+## What is the stepdown rule?
 
-Robert C. Martin's *Clean Code* calls it the **Stepdown Rule**. Kent Beck calls it **Reading Order** in *Tidy First?*. Same idea — functions should be ordered so that each function appears above the functions it calls.
+Robert C. Martin's *Clean Code* calls it the **Stepdown Rule**. Kent Beck calls it **Reading Order** in *Tidy First?*. Both describe the same idea: functions should be ordered so that each function appears above the functions it calls.
 
 ## Install
 
@@ -29,19 +29,51 @@ stepdown ./...
 go vet -vettool=$(which stepdown) ./...
 ```
 
-## Configure
+## Use with golangci-lint
 
-Programmatic integrations can pass exclusions through `Settings`:
+stepdown is available as a module plugin. Add it to `.custom-gcl.yml`:
 
-```go
-stepdown.NewAnalyzer(stepdown.Settings{
-	Exclusions: []string{"init", "main", "Server.handle", "handle"},
-})
+```yaml
+version: v2.13.1
+plugins:
+  - module: github.com/raeperd/stepdown
+    import: github.com/raeperd/stepdown/plugin
+    version: v0.1.0
 ```
 
-Exclusions support plain function names, receiver-qualified method names, and short method names that match across receiver types.
+Build a custom golangci-lint binary:
 
-Native golangci-lint support is planned in [#8](https://github.com/raeperd/stepdown/issues/8).
+```bash
+golangci-lint custom
+```
+
+Register and configure stepdown in `.golangci.yml`:
+
+```yaml
+version: "2"
+linters:
+  enable:
+    - stepdown
+  settings:
+    custom:
+      stepdown:
+        type: module
+        description: Checks that callers are declared before callees.
+        settings:
+          exclusions:
+            - init
+            - main
+```
+
+Run the custom binary:
+
+```bash
+./custom-gcl run
+```
+
+## Development
+
+AI tools were used during development. I personally reviewed every line of code in this repository, understand how it works, and take responsibility for its design, implementation, and maintenance.
 
 ## Contributing
 

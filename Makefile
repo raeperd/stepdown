@@ -9,7 +9,7 @@ build:
 	go build -ldflags "-s -w" -trimpath ./cmd/stepdown/
 
 test: clean
-	go test -race -coverprofile=coverage.txt .
+	go test -race -coverprofile=coverage.txt ./...
 
 lint:
 	golangci-lint run
